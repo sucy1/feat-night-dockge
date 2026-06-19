@@ -359,10 +359,14 @@ export class DockerSocketHandler extends AgentSocketHandler {
                 containerLog.join(socket);
                 await containerLog.start();
 
+                const initialData = containerLog.getLinesWithOffset(-tailLines, tailLines);
+
                 callbackResult({
                     ok: true,
                     logName: containerLog.name,
-                    buffer: containerLog.getBuffer(),
+                    totalLines: initialData.totalLines,
+                    lines: initialData.lines,
+                    tail: tailLines,
                 }, callback);
             } catch (e) {
                 callbackError(e, callback);
@@ -389,6 +393,70 @@ export class DockerSocketHandler extends AgentSocketHandler {
 
                 callbackResult({
                     ok: true,
+                }, callback);
+            } catch (e) {
+                callbackError(e, callback);
+            }
+        });
+
+        // Search container logs
+        agentSocket.on("containerLogsSearch", async (stackName: unknown, serviceName: unknown, keyword: unknown, offset: unknown, limit: unknown, callback) => {
+            try {
+                checkLogin(socket);
+
+                if (typeof stackName !== "string") {
+                    throw new ValidationError("Stack name must be a string");
+                }
+                if (typeof serviceName !== "string") {
+                    throw new ValidationError("Service name must be a string");
+                }
+                if (keyword !== undefined && keyword !== null && typeof keyword !== "string") {
+                    throw new ValidationError("Keyword must be a string");
+                }
+
+                let searchOffset = 0;
+                if (typeof offset === "number" && offset >= 0) {
+                    searchOffset = Math.floor(offset);
+                } else if (typeof offset === "string") {
+                    const parsed = parseInt(offset, 10);
+                    if (!isNaN(parsed) && parsed >= 0) {
+                        searchOffset = parsed;
+                    }
+                }
+
+                let searchLimit = 100;
+                if (typeof limit === "number" && limit > 0) {
+                    searchLimit = Math.min(Math.floor(limit), 1000);
+                } else if (typeof limit === "string") {
+                    const parsed = parseInt(limit, 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                        searchLimit = Math.min(parsed, 1000);
+                    }
+                }
+
+                const logName = ContainerLog.getLogName(stackName, serviceName);
+                const containerLog = ContainerLog.getLog(logName);
+
+                if (!containerLog) {
+                    callbackResult({
+                        ok: true,
+                        totalLines: 0,
+                        matchedLines: [],
+                    }, callback);
+                    return;
+                }
+
+                const searchResult = containerLog.search(
+                    keyword as string || "",
+                    searchOffset,
+                    searchLimit,
+                    false
+                );
+
+                callbackResult({
+                    ok: true,
+                    totalLines: searchResult.totalLines,
+                    matchedLines: searchResult.matchedLines,
                 }, callback);
             } catch (e) {
                 callbackError(e, callback);

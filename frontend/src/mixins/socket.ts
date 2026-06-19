@@ -431,7 +431,7 @@ export default defineComponent({
             terminalMap.delete(terminalName);
         },
 
-        bindContainerLog(endpoint : string, stackName : string, serviceName : string, handler : { write: (data: string) => void; exit: () => void }, tail : number = 100) : Promise<{ ok: boolean; logName?: string; buffer?: string; msg?: string }> {
+        bindContainerLog(endpoint : string, stackName : string, serviceName : string, handler : { write: (data: string) => void; exit: () => void }, tail : number = 100) : Promise<{ ok: boolean; logName?: string; totalLines?: number; lines?: Array<{ lineNumber: number; text: string }>; tail?: number; msg?: string }> {
             return new Promise((resolve) => {
                 this.emitAgent(endpoint, "containerLogsJoin", stackName, serviceName, tail, (res) => {
                     if (res.ok && res.logName) {
@@ -439,7 +439,9 @@ export default defineComponent({
                         resolve({
                             ok: true,
                             logName: res.logName,
-                            buffer: res.buffer,
+                            totalLines: res.totalLines,
+                            lines: res.lines,
+                            tail: res.tail,
                         });
                     } else {
                         resolve({
@@ -454,6 +456,25 @@ export default defineComponent({
         unbindContainerLog(endpoint : string, stackName : string, serviceName : string, logName : string) {
             containerLogMap.delete(logName);
             this.emitAgent(endpoint, "containerLogsLeave", stackName, serviceName, () => {});
+        },
+
+        searchContainerLog(endpoint : string, stackName : string, serviceName : string, keyword : string, offset : number = 0, limit : number = 100) : Promise<{ ok: boolean; totalLines?: number; matchedLines?: Array<{ lineNumber: number; text: string; isMatch?: boolean; isCurrentMatch?: boolean }>; msg?: string }> {
+            return new Promise((resolve) => {
+                this.emitAgent(endpoint, "containerLogsSearch", stackName, serviceName, keyword, offset, limit, (res) => {
+                    if (res.ok) {
+                        resolve({
+                            ok: true,
+                            totalLines: res.totalLines,
+                            matchedLines: res.matchedLines,
+                        });
+                    } else {
+                        resolve({
+                            ok: false,
+                            msg: res.msg,
+                        });
+                    }
+                });
+            });
         },
 
     }

@@ -13,7 +13,7 @@
                     {{ $t("live") || "Live" }}
                 </span>
                 <span v-if="searchKeyword" class="badge bg-info">
-                    {{ filteredLines.length }} / {{ logLines.length }} lines
+                    {{ currentMatchIndex + 1 }} / {{ totalMatches }} matches
                 </span>
             </div>
             <div class="d-flex align-items-center gap-2 flex-wrap">
@@ -27,7 +27,7 @@
                             type="text"
                             class="form-control form-control-sm"
                             :placeholder="$t('search') || 'Search...'"
-                            @input="onSearchInput"
+                            @keydown.enter="onSearchEnter"
                         />
                         <button
                             v-if="searchKeyword"
@@ -41,20 +41,20 @@
                     <div v-if="searchKeyword" class="search-nav ms-2 d-flex align-items-center gap-1">
                         <button
                             class="btn btn-sm btn-normal"
-                            :disabled="currentMatchIndex <= 0"
-                            :title="$t('previousMatch') || 'Previous Match'"
+                            :disabled="searching || currentMatchIndex <= 0"
                             @click="prevMatch"
+                            :title="$t('previousMatch') || 'Previous Match'"
                         >
-                            <font-awesome-icon icon="chevron-up" />
+                            <font-awesome-icon :icon="searching ? 'spinner' : 'chevron-up'" :spin="searching" />
                         </button>
                         <span class="search-counter" style="font-size: 0.75rem; min-width: 50px; text-align: center;">
-                            {{ filteredLines.length > 0 ? currentMatchIndex + 1 : 0 }} / {{ filteredLines.length }}
+                            {{ totalMatches > 0 ? currentMatchIndex + 1 : 0 }} / {{ totalMatches }}
                         </span>
                         <button
                             class="btn btn-sm btn-normal"
-                            :disabled="currentMatchIndex >= filteredLines.length - 1"
-                            :title="$t('nextMatch') || 'Next Match'"
+                            :disabled="searching || currentMatchIndex >= totalMatches - 1"
                             @click="nextMatch"
+                            :title="$t('nextMatch') || 'Next Match'"
                         >
                             <font-awesome-icon icon="chevron-down" />
                         </button>
@@ -78,31 +78,31 @@
                 <button
                     class="btn btn-sm"
                     :class="showLineNumbers ? 'btn-primary' : 'btn-normal'"
-                    :title="showLineNumbers ? ($t('hideLineNumbers') || 'Hide Line Numbers') : ($t('showLineNumbers') || 'Show Line Numbers')"
                     @click="showLineNumbers = !showLineNumbers"
+                    :title="showLineNumbers ? ($t('hideLineNumbers') || 'Hide Line Numbers') : ($t('showLineNumbers') || 'Show Line Numbers')"
                 >
                     <font-awesome-icon icon="list-ol" />
                 </button>
                 <button
                     class="btn btn-sm btn-normal"
                     :disabled="!autoScroll"
-                    :title="$t('scrollToBottom') || 'Scroll to Bottom'"
                     @click="scrollToBottom"
+                    :title="$t('scrollToBottom') || 'Scroll to Bottom'"
                 >
                     <font-awesome-icon icon="angles-down" />
                 </button>
                 <button
                     class="btn btn-sm"
                     :class="autoScroll ? 'btn-primary' : 'btn-normal'"
-                    :title="autoScroll ? ($t('disableAutoScroll') || 'Disable Auto Scroll') : ($t('enableAutoScroll') || 'Enable Auto Scroll')"
                     @click="autoScroll = !autoScroll"
+                    :title="autoScroll ? ($t('disableAutoScroll') || 'Disable Auto Scroll') : ($t('enableAutoScroll') || 'Enable Auto Scroll')"
                 >
                     <font-awesome-icon icon="arrows-down-to-line" />
                 </button>
                 <button
                     class="btn btn-sm btn-normal"
-                    :title="$t('clearLog') || 'Clear Log'"
                     @click="clearLog"
+                    :title="$t('clearLog') || 'Clear Log'"
                 >
                     <font-awesome-icon icon="eraser" />
                 </button>
@@ -110,17 +110,30 @@
         </div>
         <div ref="logContainer" class="log-container" @scroll="onScroll">
             <div ref="logContent" class="log-content">
-                <div
-                    v-for="(line, index) in displayLines"
-                    :key="index"
-                    :ref="el => setLineRef(line.originalIndex, el)"
-                    class="log-line"
-                    :class="{ 'highlight': line.isMatch, 'current-match': line.isCurrentMatch }"
-                >
-                    <span v-if="showLineNumbers" class="line-number">{{ line.lineNumber }}</span>
-                    <!-- eslint-disable-next-line vue/no-v-html -->
-                    <span class="line-text" v-html="line.highlightedText"></span>
-                </div>
+                <template v-if="!searchKeyword">
+                    <div
+                        v-for="(line, index) in displayAllLines"
+                        :key="'all-' + line.lineNumber"
+                        class="log-line"
+                        :ref="el => setLineRef('all', line.lineNumber, el)"
+                    >
+                        <span v-if="showLineNumbers" class="line-number">{{ line.lineNumber }}</span>
+                        <span class="line-text">{{ line.text }}</span>
+                    </div>
+                </template>
+                <template v-else>
+                    <div
+                        v-for="(line, index) in displaySearchLines"
+                        :key="'search-' + line.lineNumber + '-' + index"
+                        class="log-line"
+                        :class="{ 'highlight': line.isMatch, 'current-match': line.isCurrentMatch }"
+                        :ref="el => setLineRef('search', line.lineNumber, el)"
+                    >
+                        <span v-if="showLineNumbers" class="line-number">{{ line.lineNumber }}</span>
+                        <!-- eslint-disable-next-line vue/no-v-html -->
+                        <span class="line-text" v-html="highlightKeyword(line.text)"></span>
+                    </div>
+                </template>
             </div>
             <div ref="scrollAnchor" class="scroll-anchor"></div>
         </div>
@@ -151,7 +164,9 @@ export default defineComponent({
     },
     data() {
         return {
-            logText: "",
+            allLines: [],
+            displayAllLines: [],
+            displaySearchLines: [],
             autoScroll: true,
             logReady: false,
             logName: "",
@@ -160,70 +175,14 @@ export default defineComponent({
             showLineNumbers: true,
             searchKeyword: "",
             currentMatchIndex: 0,
-            lineRefs: {},
+            totalMatches: 0,
+            searching: false,
+            debounceTimer: null,
+            lineRefs: {
+                all: {},
+                search: {},
+            },
         };
-    },
-    computed: {
-        logLines() {
-            if (!this.logText) {
-                return [];
-            }
-            const lines = this.logText.split("\n");
-            if (lines.length > 0 && lines[lines.length - 1] === "") {
-                lines.pop();
-            }
-            return lines;
-        },
-        filteredLines() {
-            if (!this.searchKeyword) {
-                return this.logLines.map((text, index) => {
-                    return {
-                        text,
-                        originalIndex: index,
-                        lineNumber: index + 1,
-                        isMatch: false,
-                        isCurrentMatch: false,
-                        highlightedText: this.escapeHtml(text),
-                    };
-                });
-            }
-
-            const keyword = this.searchKeyword.toLowerCase();
-            const result = [];
-            let matchCount = 0;
-
-            this.logLines.forEach((text, index) => {
-                if (text.toLowerCase().includes(keyword)) {
-                    const isCurrentMatch = matchCount === this.currentMatchIndex;
-                    result.push({
-                        text,
-                        originalIndex: index,
-                        lineNumber: index + 1,
-                        isMatch: true,
-                        isCurrentMatch: isCurrentMatch,
-                        highlightedText: this.highlightKeyword(text, this.searchKeyword),
-                    });
-                    matchCount++;
-                }
-            });
-
-            return result;
-        },
-        displayLines() {
-            if (!this.searchKeyword) {
-                return this.logLines.map((text, index) => {
-                    return {
-                        text,
-                        originalIndex: index,
-                        lineNumber: index + 1,
-                        isMatch: false,
-                        isCurrentMatch: false,
-                        highlightedText: this.escapeHtml(text),
-                    };
-                });
-            }
-            return this.filteredLines;
-        },
     },
     watch: {
         serviceName: {
@@ -235,12 +194,7 @@ export default defineComponent({
             },
         },
         searchKeyword() {
-            this.currentMatchIndex = 0;
-            if (this.searchKeyword && this.filteredLines.length > 0) {
-                this.$nextTick(() => {
-                    this.scrollToCurrentMatch();
-                });
-            }
+            this.debouncedSearch();
         },
     },
     mounted() {
@@ -248,11 +202,17 @@ export default defineComponent({
     },
     beforeUnmount() {
         this.disconnect();
+        if (this.debounceTimer) {
+            clearTimeout(this.debounceTimer);
+        }
     },
     methods: {
-        setLineRef(index, el) {
+        setLineRef(mode, lineNumber, el) {
             if (el) {
-                this.lineRefs[index] = el;
+                if (!this.lineRefs[mode]) {
+                    this.lineRefs[mode] = {};
+                }
+                this.lineRefs[mode][lineNumber] = el;
             }
         },
 
@@ -262,20 +222,23 @@ export default defineComponent({
             return div.innerHTML;
         },
 
-        highlightKeyword(text, keyword) {
-            if (!keyword) {
+        highlightKeyword(text) {
+            if (!this.searchKeyword) {
                 return this.escapeHtml(text);
             }
             const escapedText = this.escapeHtml(text);
-            const escapedKeyword = this.escapeHtml(keyword);
+            const escapedKeyword = this.escapeHtml(this.searchKeyword);
             const regex = new RegExp(`(${escapedKeyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
-            return escapedText.replace(regex, "<span class=\"keyword-highlight\">$1</span>");
+            return escapedText.replace(regex, '<span class="keyword-highlight">$1</span>');
         },
 
         async connect() {
             this.logReady = false;
-            this.logText = "";
+            this.allLines = [];
+            this.displayAllLines = [];
+            this.displaySearchLines = [];
             this.currentMatchIndex = 0;
+            this.totalMatches = 0;
 
             const handler = {
                 write: (data) => this.writeLog(data),
@@ -292,13 +255,22 @@ export default defineComponent({
 
             if (res.ok) {
                 this.logName = res.logName || "";
-                if (res.buffer) {
-                    this.logText = res.buffer;
-                    this.$nextTick(() => this.scrollToBottom());
+                if (res.lines && res.lines.length > 0) {
+                    this.allLines = res.lines.map((line) => ({
+                        lineNumber: line.lineNumber,
+                        text: line.text,
+                    }));
+                    this.displayAllLines = [...this.allLines];
                 }
+                this.$nextTick(() => this.scrollToBottom());
                 this.logReady = true;
             } else {
-                this.logText = `[Error] ${res.msg || "Failed to connect to log stream"}\n`;
+                const errorLine = {
+                    lineNumber: 1,
+                    text: `[Error] ${res.msg || "Failed to connect to log stream"}`,
+                };
+                this.allLines = [ errorLine ];
+                this.displayAllLines = [ errorLine ];
                 this.logReady = false;
             }
         },
@@ -322,28 +294,52 @@ export default defineComponent({
         },
 
         writeLog(data) {
-            this.logText += data;
+            const lines = data.split("\n");
 
-            const lines = this.logText.split("\n");
-            const maxLines = this.selectedTail * 10;
-            if (lines.length > maxLines) {
-                this.logText = lines.slice(-maxLines).join("\n");
+            if (this.allLines.length === 0) {
+                this.allLines = [];
             }
 
-            if (this.autoScroll && !this.userScrolledUp && !this.searchKeyword) {
-                this.$nextTick(() => this.scrollToBottom());
+            let startLineNumber = 0;
+            if (this.allLines.length > 0) {
+                startLineNumber = this.allLines[this.allLines.length - 1].lineNumber;
+            }
+
+            for (const line of lines) {
+                if (line !== "") {
+                    startLineNumber++;
+                    this.allLines.push({
+                        lineNumber: startLineNumber,
+                        text: line,
+                    });
+                }
+            }
+
+            const maxLines = this.selectedTail * 20;
+            if (this.allLines.length > maxLines) {
+                const removeCount = this.allLines.length - maxLines;
+                this.allLines.splice(0, removeCount);
+            }
+
+            if (!this.searchKeyword) {
+                this.displayAllLines = [...this.allLines];
+                if (this.autoScroll && !this.userScrolledUp) {
+                    this.$nextTick(() => this.scrollToBottom());
+                }
             }
         },
 
         onExit() {
             this.logReady = false;
-            this.logText += "\n[Log stream disconnected]\n";
+            this.writeLog("\n[Log stream disconnected]\n");
         },
 
         scrollToBottom() {
             if (this.$refs.scrollAnchor) {
-                this.$refs.scrollAnchor.scrollIntoView({ behavior: "smooth",
-                    block: "end" });
+                this.$refs.scrollAnchor.scrollIntoView({
+                    behavior: "smooth",
+                    block: "end",
+                });
             }
             this.userScrolledUp = false;
         },
@@ -367,48 +363,134 @@ export default defineComponent({
         },
 
         clearLog() {
-            this.logText = "";
+            this.allLines = [];
+            this.displayAllLines = [];
+            this.displaySearchLines = [];
             this.currentMatchIndex = 0;
+            this.totalMatches = 0;
         },
 
-        onSearchInput() {
-            // Reset current match index when searching
+        debouncedSearch() {
+            if (this.debounceTimer) {
+                clearTimeout(this.debounceTimer);
+            }
+
+            if (!this.searchKeyword) {
+                this.currentMatchIndex = 0;
+                this.totalMatches = 0;
+                this.displaySearchLines = [];
+                return;
+            }
+
+            this.debounceTimer = setTimeout(() => {
+                this.doSearch(0);
+            }, 300);
+        },
+
+        onSearchEnter() {
+            if (!this.searchKeyword) {
+                return;
+            }
+            this.nextMatch();
+        },
+
+        async doSearch(offset) {
+            if (!this.searchKeyword) {
+                return;
+            }
+
+            this.searching = true;
+
+            try {
+                const res = await this.$root.searchContainerLog(
+                    this.endpoint,
+                    this.stackName,
+                    this.serviceName,
+                    this.searchKeyword,
+                    offset,
+                    100
+                );
+
+                if (res.ok) {
+                    this.totalMatches = res.totalLines || 0;
+                    this.currentMatchIndex = offset;
+
+                    if (this.totalMatches > 0 && this.currentMatchIndex >= this.totalMatches) {
+                        this.currentMatchIndex = 0;
+                        if (offset !== 0) {
+                            await this.doSearch(0);
+                            return;
+                        }
+                    }
+
+                    this.displaySearchLines = (res.matchedLines || []).map((line, index) => ({
+                        lineNumber: line.lineNumber,
+                        text: line.text,
+                        isMatch: true,
+                        isCurrentMatch: line.isCurrentMatch || (offset + index) === this.currentMatchIndex,
+                    }));
+
+                    this.$nextTick(() => {
+                        this.scrollToCurrentMatch();
+                    });
+                } else {
+                    this.totalMatches = 0;
+                    this.displaySearchLines = [];
+                }
+            } catch (e) {
+                this.totalMatches = 0;
+                this.displaySearchLines = [];
+            } finally {
+                this.searching = false;
+            }
         },
 
         clearSearch() {
             this.searchKeyword = "";
             this.currentMatchIndex = 0;
+            this.totalMatches = 0;
+            this.displaySearchLines = [];
+            this.lineRefs.search = {};
         },
 
-        nextMatch() {
-            if (this.currentMatchIndex < this.filteredLines.length - 1) {
-                this.currentMatchIndex++;
-                this.$nextTick(() => {
-                    this.scrollToCurrentMatch();
-                });
-            }
-        },
-
-        prevMatch() {
-            if (this.currentMatchIndex > 0) {
-                this.currentMatchIndex--;
-                this.$nextTick(() => {
-                    this.scrollToCurrentMatch();
-                });
-            }
-        },
-
-        scrollToCurrentMatch() {
-            if (this.filteredLines.length === 0) {
+        async nextMatch() {
+            if (!this.searchKeyword || this.searching || this.totalMatches === 0) {
                 return;
             }
 
-            const currentLine = this.filteredLines[this.currentMatchIndex];
+            let nextIndex = this.currentMatchIndex + 1;
+            if (nextIndex >= this.totalMatches) {
+                nextIndex = 0;
+            }
+
+            await this.doSearch(nextIndex);
+        },
+
+        async prevMatch() {
+            if (!this.searchKeyword || this.searching || this.totalMatches === 0) {
+                return;
+            }
+
+            let prevIndex = this.currentMatchIndex - 1;
+            if (prevIndex < 0) {
+                prevIndex = this.totalMatches - 1;
+            }
+
+            await this.doSearch(prevIndex);
+        },
+
+        scrollToCurrentMatch() {
+            if (this.displaySearchLines.length === 0) {
+                return;
+            }
+
+            const currentLine = this.displaySearchLines.find((line) => line.isCurrentMatch);
             if (!currentLine) {
                 return;
             }
 
-            const lineEl = this.lineRefs[currentLine.originalIndex];
+            const mode = this.searchKeyword ? "search" : "all";
+            const lineEl = this.lineRefs[mode] && this.lineRefs[mode][currentLine.lineNumber];
             if (lineEl && lineEl[0]) {
                 const container = this.$refs.logContainer;
                 if (container) {

@@ -21,4 +21,20 @@ export class LimitQueue<T> extends Array<T> {
         }
     }
 
+    resize(newLimit: number) {
+        this.__limit = newLimit;
+        while (this.length > this.__limit) {
+            const item = this.shift();
+            if (this.__onExceed) {
+                this.__onExceed(item);
+            }
+        }
+    }
+
+    clear() {
+        while (this.length > 0) {
+            this.shift();
+        }
+    }
+
 }

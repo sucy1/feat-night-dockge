@@ -5,6 +5,18 @@ import childProcess from "child_process";
 import { log } from "./log";
 import { Stack } from "./stack";
 
+export interface LogLine {
+    lineNumber: number;
+    text: string;
+    isMatch?: boolean;
+    isCurrentMatch?: boolean;
+}
+
+export interface SearchResult {
+    totalLines: number;
+    matchedLines: LogLine[];
+}
+
 export class ContainerLog {
     protected static logMap: Map<string, ContainerLog> = new Map();
 
@@ -17,7 +29,9 @@ export class ContainerLog {
     protected containerName?: string;
     protected logsProcess?: childProcess.ChildProcessWithoutNullStreams;
 
-    protected buffer: LimitQueue<string> = new LimitQueue(500);
+    protected lineBuffer: LimitQueue<LogLine>;
+    protected lineCounter: number = 0;
+
     protected socketList: Record<string, DockgeSocket> = {};
 
     protected kickDisconnectedClientsInterval?: NodeJS.Timeout;
@@ -27,6 +41,10 @@ export class ContainerLog {
         this.stackName = stackName;
         this.serviceName = serviceName;
         this.tail = tail;
+
+        const maxBufferLines = Math.max(tail * 20, 2000);
+        this.lineBuffer = new LimitQueue<LogLine>(maxBufferLines);
+
         this._name = `${stackName}-${serviceName}`;
 
         ContainerLog.logMap.set(this.name, this);
@@ -51,6 +69,8 @@ export class ContainerLog {
             containerLog = new ContainerLog(server, stackName, serviceName, tail);
         } else {
             containerLog.tail = tail;
+            const maxBufferLines = Math.max(tail * 20, 2000);
+            containerLog.lineBuffer.resize(maxBufferLines);
         }
         return containerLog;
     }
@@ -86,6 +106,9 @@ export class ContainerLog {
                 throw new Error(`Container name not found for service ${this.serviceName}`);
             }
 
+            this.lineBuffer.clear();
+            this.lineCounter = 0;
+
             this.logsProcess = childProcess.spawn("docker", [
                 "logs",
                 "--tail", String(this.tail),
@@ -94,15 +117,11 @@ export class ContainerLog {
             ]);
 
             this.logsProcess.stdout.on("data", (data: Buffer) => {
-                const str = data.toString();
-                this.buffer.pushItem(str);
-                this.broadcast(str);
+                this.processLogData(data.toString());
             });
 
             this.logsProcess.stderr.on("data", (data: Buffer) => {
-                const str = data.toString();
-                this.buffer.pushItem(str);
-                this.broadcast(str);
+                this.processLogData(data.toString());
             });
 
             this.logsProcess.on("close", (code) => {
@@ -117,18 +136,59 @@ export class ContainerLog {
 
         } catch (e) {
             if (e instanceof Error) {
-                const errorMsg = `[Error] ${e.message}\n`;
-                this.buffer.pushItem(errorMsg);
-                this.broadcast(errorMsg);
+                this.addErrorLine(e.message);
+                this.broadcastError(e.message);
             }
             this.cleanup();
         }
     }
 
-    protected broadcast(data: string): void {
+    protected processLogData(data: string): void {
+        const lines = data.split("\n");
+
+        for (const line of lines) {
+            if (line === "" && lines[lines.length - 1] === line && line === lines[lines.indexOf(line)]) {
+                continue;
+            }
+            if (line !== "" || (data.endsWith("\n") && line === "" && lines.indexOf(line) === lines.length - 1)) {
+                if (line !== "") {
+                    this.addLogLine(line);
+                }
+            }
+        }
+
+        this.broadcastIncremental(data);
+    }
+
+    protected addLogLine(text: string): void {
+        this.lineCounter++;
+        const logLine: LogLine = {
+            lineNumber: this.lineCounter,
+            text: text,
+        };
+        this.lineBuffer.pushItem(logLine);
+    }
+
+    protected addErrorLine(message: string): void {
+        this.lineCounter++;
+        const logLine: LogLine = {
+            lineNumber: this.lineCounter,
+            text: `[Error] ${message}`,
+        };
+        this.lineBuffer.pushItem(logLine);
+    }
+
+    protected broadcastIncremental(data: string): void {
         for (const socketID in this.socketList) {
             const socket = this.socketList[socketID];
             socket.emitAgent("containerLogWrite", this.name, data);
+        }
+    }
+
+    protected broadcastError(message: string): void {
+        for (const socketID in this.socketList) {
+            const socket = this.socketList[socketID];
+            socket.emitAgent("containerLogWrite", this.name, `[Error] ${message}\n`);
         }
     }
 
@@ -163,11 +223,102 @@ export class ContainerLog {
         this.socketList = {};
     }
 
-    public getBuffer(): string {
-        if (this.buffer.length === 0) {
+    public getRawText(): string {
+        if (this.lineBuffer.length === 0) {
             return "";
         }
-        return this.buffer.join("");
+        const texts = this.lineBuffer.map((line) => line.text);
+        return texts.join("\n") + "\n";
+    }
+
+    public getLines(): LogLine[] {
+        if (this.lineBuffer.length === 0) {
+            return [];
+        }
+        return this.lineBuffer.map((line) => ({ ...line }));
+    }
+
+    public getLinesWithOffset(offset: number = 0, limit: number = 1000): { totalLines: number; lines: LogLine[] } {
+        const allLines = this.getLines();
+        const totalLines = allLines.length;
+
+        if (offset < 0) {
+            offset = Math.max(0, totalLines + offset);
+        }
+
+        const endIndex = Math.min(offset + limit, totalLines);
+        return {
+            totalLines,
+            lines: allLines.slice(offset, endIndex),
+        };
+    }
+
+    public search(
+        keyword: string,
+        offset: number = 0,
+        limit: number = 100,
+        caseSensitive: boolean = false
+    ): SearchResult {
+        const allLines = this.getLines();
+
+        if (!keyword) {
+            const result = this.getLinesWithOffset(-limit, limit);
+            return {
+                totalLines: result.totalLines,
+                matchedLines: result.lines.map((line, index) => ({
+                    ...line,
+                    isMatch: false,
+                    isCurrentMatch: index === 0 && offset === 0,
+                })),
+            };
+        }
+
+        const searchKeyword = caseSensitive ? keyword : keyword.toLowerCase();
+
+        const matchedLines: LogLine[] = [];
+        for (let i = 0; i < allLines.length; i++) {
+            const line = allLines[i];
+            const lineText = caseSensitive ? line.text : line.text.toLowerCase();
+
+            if (lineText.includes(searchKeyword)) {
+                matchedLines.push({
+                    ...line,
+                    isMatch: true,
+                    isCurrentMatch: matchedLines.length === offset,
+                });
+            }
+        }
+
+        const totalMatches = matchedLines.length;
+
+        const endIndex = Math.min(offset + limit, totalMatches);
+        const pageLines = matchedLines.slice(offset, endIndex);
+
+        return {
+            totalLines: totalMatches,
+            matchedLines: pageLines,
+        };
+    }
+
+    public getMatchIndexByLineNumber(lineNumber: number, keyword: string, caseSensitive: boolean = false): number {
+        const allLines = this.getLines();
+        const searchKeyword = caseSensitive ? keyword : keyword.toLowerCase();
+
+        let matchIndex = -1;
+        for (let i = 0; i < allLines.length; i++) {
+            const line = allLines[i];
+            const lineText = caseSensitive ? line.text : line.text.toLowerCase();
+
+            if (lineText.includes(searchKeyword)) {
+                matchIndex++;
+            }
+
+            if (line.lineNumber === lineNumber) {
+                return matchIndex;
+            }
+        }
+
+        return -1;
     }
 
     public static getLogCount(): number {
