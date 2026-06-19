@@ -24,8 +24,8 @@
                         <button
                             v-if="!isEditMode && !expandedLogs"
                             class="btn btn-normal"
-                            @click="expandedLogs = true"
                             :disabled="status !== 'running' && status !== 'healthy' && status !== 'unhealthy'"
+                            @click="expandedLogs = true"
                         >
                             <font-awesome-icon icon="file-lines" class="me-1" />
                             {{ $t("logs") || "Logs" }}

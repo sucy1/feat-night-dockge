@@ -63,6 +63,8 @@ import {
     faArrowsDownToLine,
     faEraser,
     faXmark,
+    faMagnifyingGlass,
+    faListOl,
 } from "@fortawesome/free-solid-svg-icons";
 
 library.add(
@@ -127,6 +129,8 @@ library.add(
     faArrowsDownToLine,
     faEraser,
     faXmark,
+    faMagnifyingGlass,
+    faListOl,
 );
 
 export { FontAwesomeIcon };

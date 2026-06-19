@@ -436,9 +436,16 @@ export default defineComponent({
                 this.emitAgent(endpoint, "containerLogsJoin", stackName, serviceName, tail, (res) => {
                     if (res.ok && res.logName) {
                         containerLogMap.set(res.logName, handler);
-                        resolve({ ok: true, logName: res.logName, buffer: res.buffer });
+                        resolve({
+                            ok: true,
+                            logName: res.logName,
+                            buffer: res.buffer,
+                        });
                     } else {
-                        resolve({ ok: false, msg: res.msg });
+                        resolve({
+                            ok: false,
+                            msg: res.msg,
+                        });
                     }
                 });
             });
