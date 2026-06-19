@@ -22,6 +22,23 @@
                             Bash
                         </router-link>
                         <button
+                            v-if="!isEditMode && !expandedLogs"
+                            class="btn btn-normal"
+                            @click="expandedLogs = true"
+                            :disabled="status !== 'running' && status !== 'healthy' && status !== 'unhealthy'"
+                        >
+                            <font-awesome-icon icon="file-lines" class="me-1" />
+                            {{ $t("logs") || "Logs" }}
+                        </button>
+                        <button
+                            v-if="!isEditMode && expandedLogs"
+                            class="btn btn-primary"
+                            @click="expandedLogs = false"
+                        >
+                            <font-awesome-icon icon="xmark" class="me-1" />
+                            {{ $t("closeLogs") || "Close Logs" }}
+                        </button>
+                        <button
                             v-if="serviceCount > 1 && !isEditMode && status !== 'running' && status !== 'healthy'"
                             class="btn btn-primary"
                             :disabled="processing"
@@ -90,6 +107,16 @@
                 </div>
             </transition>
         </div>
+
+        <transition name="slide-fade" appear>
+            <div v-if="!isEditMode && expandedLogs" class="mt-3">
+                <ContainerLog
+                    :stack-name="stackName"
+                    :service-name="name"
+                    :endpoint="endpoint"
+                />
+            </div>
+        </transition>
 
         <transition name="slide-fade" appear>
             <div v-if="isEditMode && showConfig" class="config mt-3">
@@ -194,11 +221,13 @@ import { defineComponent } from "vue";
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { parseDockerPort } from "../../../common/util-common";
 import DockerStat from "./DockerStat.vue";
+import ContainerLog from "./ContainerLog.vue";
 
 export default defineComponent({
     components: {
         FontAwesomeIcon,
-        DockerStat
+        DockerStat,
+        ContainerLog
     },
     props: {
         name: {
@@ -231,6 +260,7 @@ export default defineComponent({
         return {
             showConfig: false,
             expandedStats: false,
+            expandedLogs: false,
         };
     },
     computed: {

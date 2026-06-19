@@ -3,6 +3,7 @@ import { DockgeServer } from "../dockge-server";
 import { callbackError, callbackResult, checkLogin, DockgeSocket, ValidationError } from "../util-server";
 import { Stack } from "../stack";
 import { AgentSocket } from "../../common/agent-socket";
+import { ContainerLog } from "../container-log";
 
 export class DockerSocketHandler extends AgentSocketHandler {
     create(socket : DockgeSocket, server : DockgeServer, agentSocket : AgentSocket) {
@@ -326,6 +327,68 @@ export class DockerSocketHandler extends AgentSocketHandler {
                 callbackResult({
                     ok: true,
                     dockerNetworkList,
+                }, callback);
+            } catch (e) {
+                callbackError(e, callback);
+            }
+        });
+
+        // Join container logs
+        agentSocket.on("containerLogsJoin", async (stackName: unknown, serviceName: unknown, tail: unknown, callback) => {
+            try {
+                checkLogin(socket);
+
+                if (typeof stackName !== "string") {
+                    throw new ValidationError("Stack name must be a string");
+                }
+                if (typeof serviceName !== "string") {
+                    throw new ValidationError("Service name must be a string");
+                }
+
+                let tailLines = 100;
+                if (typeof tail === "number" && tail > 0) {
+                    tailLines = Math.min(tail, 5000);
+                } else if (typeof tail === "string") {
+                    const parsed = parseInt(tail, 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                        tailLines = Math.min(parsed, 5000);
+                    }
+                }
+
+                const containerLog = await ContainerLog.getOrCreateLog(server, stackName, serviceName, tailLines);
+                containerLog.join(socket);
+                await containerLog.start();
+
+                callbackResult({
+                    ok: true,
+                    logName: containerLog.name,
+                    buffer: containerLog.getBuffer(),
+                }, callback);
+            } catch (e) {
+                callbackError(e, callback);
+            }
+        });
+
+        // Leave container logs
+        agentSocket.on("containerLogsLeave", async (stackName: unknown, serviceName: unknown, callback) => {
+            try {
+                checkLogin(socket);
+
+                if (typeof stackName !== "string") {
+                    throw new ValidationError("Stack name must be a string");
+                }
+                if (typeof serviceName !== "string") {
+                    throw new ValidationError("Service name must be a string");
+                }
+
+                const logName = ContainerLog.getLogName(stackName, serviceName);
+                const containerLog = ContainerLog.getLog(logName);
+                if (containerLog) {
+                    containerLog.leave(socket);
+                }
+
+                callbackResult({
+                    ok: true,
                 }, callback);
             } catch (e) {
                 callbackError(e, callback);

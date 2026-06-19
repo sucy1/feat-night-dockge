@@ -8,6 +8,7 @@ import { AgentSocket } from "../../../common/agent-socket";
 let socket : Socket;
 
 let terminalMap : Map<string, Terminal> = new Map();
+let containerLogMap : Map<string, { write: (data: string) => void; exit: () => void }> = new Map();
 
 export default defineComponent({
     data() {
@@ -249,6 +250,20 @@ export default defineComponent({
                 terminal.write(data);
             });
 
+            agentSocket.on("containerLogWrite", (logName, data) => {
+                const logHandler = containerLogMap.get(logName as string);
+                if (logHandler) {
+                    logHandler.write(data as string);
+                }
+            });
+
+            agentSocket.on("containerLogExit", (logName) => {
+                const logHandler = containerLogMap.get(logName as string);
+                if (logHandler) {
+                    logHandler.exit();
+                }
+            });
+
             agentSocket.on("stackList", (res) => {
                 if (res.ok) {
                     if (!res.endpoint) {
@@ -414,6 +429,24 @@ export default defineComponent({
 
         unbindTerminal(terminalName : string) {
             terminalMap.delete(terminalName);
+        },
+
+        bindContainerLog(endpoint : string, stackName : string, serviceName : string, handler : { write: (data: string) => void; exit: () => void }, tail : number = 100) : Promise<{ ok: boolean; logName?: string; buffer?: string; msg?: string }> {
+            return new Promise((resolve) => {
+                this.emitAgent(endpoint, "containerLogsJoin", stackName, serviceName, tail, (res) => {
+                    if (res.ok && res.logName) {
+                        containerLogMap.set(res.logName, handler);
+                        resolve({ ok: true, logName: res.logName, buffer: res.buffer });
+                    } else {
+                        resolve({ ok: false, msg: res.msg });
+                    }
+                });
+            });
+        },
+
+        unbindContainerLog(endpoint : string, stackName : string, serviceName : string, logName : string) {
+            containerLogMap.delete(logName);
+            this.emitAgent(endpoint, "containerLogsLeave", stackName, serviceName, () => {});
         },
 
     }

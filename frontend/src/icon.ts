@@ -57,6 +57,12 @@ import {
     faCloudArrowDown, faArrowsRotate,
     faChevronCircleRight,
     faChevronCircleDown,
+    faFileLines,
+    faCircle,
+    faAnglesDown,
+    faArrowsDownToLine,
+    faEraser,
+    faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 
 library.add(
@@ -115,6 +121,12 @@ library.add(
     faArrowsRotate,
     faChevronCircleRight,
     faChevronCircleDown,
+    faFileLines,
+    faCircle,
+    faAnglesDown,
+    faArrowsDownToLine,
+    faEraser,
+    faXmark,
 );
 
 export { FontAwesomeIcon };
